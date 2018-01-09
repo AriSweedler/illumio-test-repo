@@ -12,7 +12,9 @@
 
 using namespace std;
 
-#define NUM_BUCKETS 256
+#define NUM_BUCKETS_PURE 105899
+#define NUM_BUCKETS_IP 105899
+#define NUM_BUCKETS_PORT 105899
 
 //open an OUTPUT file.
 //open the FLOW file and read it one line at a time, adding to OUTPUT as we go
@@ -20,17 +22,19 @@ using namespace std;
 /************class IP address**************/
 class IP_Address {
     short port;
-    char ip[4];
-    bool ipStar = false;
-    bool portStar = false;
+    short ip[4];
+    unsigned long key;
     string stringify(char);
+    unsigned long figureKey();
 public:
     IP_Address();
     IP_Address(string myLine);
     IP_Address(const IP_Address&);
     unsigned long hash();
-    unsigned long key();
+    unsigned long getKey();
     string to_string();
+    bool onlyPort = false;
+    bool onlyIP = false;
 };
 
 IP_Address::IP_Address() {
@@ -40,18 +44,22 @@ IP_Address::IP_Address() {
 
 IP_Address::IP_Address(string str)
 {
+    this->key = 0;
+    for(int i = 0; i < 4; i++) {this->ip[i] = 0;}
     //reads in a string, and sets ip[0-3] and port accordingly.
     char c;
     int ip_i = 0;
     int str_i = 0;
     
     if (str.at(0) == '*') {
-        this->ipStar = true;
+        this->onlyPort = true;
         str_i++;
     }
     for(; str_i < 16; str_i++) {
         c = str.at(str_i);
+//        cout << "\tWe just read in a '" << c << "'." << endl;
         if(c == '.') {
+//            cout << "\t\tThat's the end of a number. The number is '" << (int)(this->ip[ip_i]) << "'." << endl;
             ip_i++;
         } else if (c == ':') {
             break;
@@ -62,10 +70,11 @@ IP_Address::IP_Address(string str)
     }
     str_i++;
     if (str.at(str_i) == '*') {
-        this->portStar = true;
+        this->onlyIP = true;
     } else {
         this->port = std::atoi(str.substr(str_i).c_str());
     }
+    this->key = figureKey();
 }
 
 IP_Address::IP_Address(const IP_Address &ipa) {
@@ -73,28 +82,38 @@ IP_Address::IP_Address(const IP_Address &ipa) {
         this->ip[i] = ipa.ip[i];
     }
     this->port = ipa.port;
+    this->key = figureKey();
 }
 
-//we could get a better hash function here
-unsigned long IP_Address::hash() {
+unsigned long IP_Address::figureKey() {
+    if (this->onlyPort) {return this->port;}
     unsigned long answer = 0;
     for(int i = 0; i < 4; i++) {
         answer += this->ip[i];
         answer <<= 8;
     }
-    answer += this->port;
-    return answer%NUM_BUCKETS;
-}
-
-unsigned long IP_Address::key() {
-    unsigned long answer = 0;
-    for(int i = 0; i < 4; i++) {
-        answer += this->ip[i] + 7;
-        answer <<= 8;
-    }
+    if (this->onlyIP) {return (answer >> 8);}
     answer += this->port;
     return answer;
 }
+
+//we could get a better hash function here
+unsigned long IP_Address::hash() {
+    unsigned long answer = this->figureKey();
+    return answer % NUM_BUCKETS_PURE;
+}
+
+//unsigned long IP_Address::hashPort() {
+//    unsigned long answer = this->key;
+//    answer &= 65535;
+//    return answer % NUM_BUCKETS_PORT;
+//}
+//
+//unsigned long IP_Address::hashIP() {
+//    unsigned long answer = this->key;
+//    answer &= ((4294967295)<<16);
+//    return answer % NUM_BUCKETS_IP;
+//}
 
 string IP_Address::to_string() {
     //cast the ip chars into numbers
@@ -102,23 +121,29 @@ string IP_Address::to_string() {
     string b = std::to_string(this->ip[1]);
     string c = std::to_string(this->ip[2]);
     string d = std::to_string(this->ip[3]);
-    string e = std::to_string(this->port);
-    return (a + "." + b + "." + c + "." + d + ":" + e);
+    string ipstring = this->onlyPort ? "*" : (a + "." + b + "." + c + "." + d);
+    string portstring = this->onlyIP ? "*" : (std::to_string(this->port));
+    return (ipstring + ":" + portstring);
+}
+
+unsigned long IP_Address::getKey() {
+    return this->key;
 }
 /**************************/
 
 /***************class NAT entry***********/
 class NAT_Entry {
-    IP_Address from;
-    IP_Address to;
     NAT_Entry* next;
 public:
     NAT_Entry();
     NAT_Entry(string);
     unsigned long hash();
-    unsigned long key();
     NAT_Entry* getNext();
-    IP_Address getTo();
+    void setNext(NAT_Entry*);
+    IP_Address from;
+    IP_Address to;
+    string to_string();
+    void addNext(NAT_Entry*);
 };
 
 NAT_Entry::NAT_Entry(string str)
@@ -133,46 +158,124 @@ unsigned long NAT_Entry::hash() {
     return this->from.hash();
 }
 
-unsigned long NAT_Entry::key() {
-    return this->from.key();
-}
-
 NAT_Entry* NAT_Entry::getNext() {
     return this->next;
 }
 
-IP_Address NAT_Entry::getTo() {
-    return this->to;
+void NAT_Entry::setNext(NAT_Entry* other) {
+    this->next = other;
+}
+
+string NAT_Entry::to_string() {
+    return this->from.to_string() + " --> " + this->to.to_string();
+}
+
+void NAT_Entry::addNext(NAT_Entry* ptr) {
+    this->next = ptr;
 }
 
 /**************************/
 
 
 /************MAIN**************/
-NAT_Entry* NAT_Database[NUM_BUCKETS];
+NAT_Entry* NAT_Database_pure[NUM_BUCKETS_PURE];
+NAT_Entry* NAT_Database_ip[NUM_BUCKETS_IP];
+NAT_Entry* NAT_Database_port[NUM_BUCKETS_PORT];
+
 int myOpen (string name, ifstream* fileptr);
-void addToOutput(string);
+NAT_Entry* checkMatch(NAT_Entry* ent, IP_Address* ip);
 
 int main () {
-    IP_Address myIP = IP_Address("1.2.3.4:10\n");
-    cout << "My starting IP address is " << myIP.to_string() << endl;
+    for(int i = 0; i < NUM_BUCKETS_PURE; i++) {
+        NAT_Database_pure[i] = NULL;
+    }
     
     //open the NAT file and read in the data
-    ifstream file;
+    ifstream nat_file;
     string myLine;
-    myOpen("./NAT", &file);
-    while (getline(file, myLine)) {
-        NAT_Entry myEntry = NAT_Entry(myLine);
-        NAT_Database[myEntry.hash()] = &myEntry;
+    nat_file.open("/Users/ari/GitHub/illumio-test-repo/NAT", fstream::in);
+    if (!nat_file) {cout << "Error opening NATfile." << endl; exit(1);}
+
+    while (nat_file >> myLine) {
+        //figure out how to store these in a hashmap accurately. Add a copy into the arry. Make the array ptrs.
+        NAT_Entry* myEntry = new NAT_Entry(myLine);
+        NAT_Entry* other;
+        if (myEntry->from.onlyIP) {
+            cout << "Saving the for the port: " << myEntry->to_string() << ". This ip hashes to " << myEntry->from.hash() << "." << endl;
+            other = NAT_Database_ip[myEntry->from.hash()];
+            NAT_Database_ip[myEntry->from.hash()] = myEntry;
+        } else if (myEntry->from.onlyPort) {
+            cout << "Saving the for the ip: " << myEntry->to_string() << ". This port hashes to " << myEntry->from.hash() << "." << endl;
+            other = NAT_Database_port[myEntry->from.hash()];
+            NAT_Database_port[myEntry->from.hash()] = myEntry;
+        } else {
+            cout << "Saving the for the pure: " << myEntry->to_string() << ". This pure hashes to " << myEntry->from.hash() << "." << endl;
+            other = NAT_Database_pure[myEntry->from.hash()];
+            NAT_Database_pure[myEntry->from.hash()] = myEntry;
+        }
+        myEntry->setNext(other);
     }
-    myOpen("./FLOW", &file);
-    while (getline(file, myLine)) {
-        addToOutput(myLine);//this checks our hashmap for out function and construcs an output accordingly.
-    }
+    nat_file.close();
+    cout << endl;
     
+    ifstream flow_file;
+    ofstream out_file;
+    flow_file.open("/Users/ari/GitHub/illumio-test-repo/FLOW", fstream::in);
+    out_file.open("/Users/ari/GitHub/illumio-test-repo/OUTPUT", fstream::out);
+    if (!flow_file) {cout << "Error opening FLOWfile." << endl; exit(1);}
+    if (!out_file) {cout << "Error opening OUTfile." << endl; exit(1);}
+    while (getline(flow_file, myLine)) {
+        IP_Address* myIP = new IP_Address(myLine);
+        NAT_Entry* answer = NULL;
+        if (myIP->onlyIP) {
+            answer = checkMatch(NAT_Database_ip[myIP->hash()], myIP);
+        } else if (myIP->onlyPort) {
+            answer = checkMatch(NAT_Database_port[myIP->hash()], myIP);
+        } else {
+            answer = checkMatch(NAT_Database_pure[myIP->hash()], myIP);
+            
+            if (answer == NULL) {
+                myIP->onlyIP = true;
+                answer = checkMatch(NAT_Database_ip[myIP->hash()], myIP);
+                myIP->onlyIP = false;
+            }
+            if (answer == NULL) {
+                myIP->onlyPort = true;
+                answer = checkMatch(NAT_Database_port[myIP->hash()], myIP);
+                myIP->onlyPort = false;
+            }
+        }
+        
+        if (answer == NULL) {
+            out_file << "No nat match for " << myIP->to_string() << endl;
+            cout << "No nat match for " << myIP->to_string() << endl;
+        } else {
+            out_file << myIP->to_string() << " -> " << answer->to.to_string() << endl;
+            cout << myIP->to_string() << " -> " << answer->to.to_string() << endl;
+        }
+    }
+    flow_file.close();
+    out_file.close();
+
     return 0;
     // now we loop back and get the next line in 'str'
 }
+
+NAT_Entry* checkMatch(NAT_Entry* ent, IP_Address* ip) {
+    while (ent != NULL) {
+        //cout << "\tChecking to see if " << ip->to_string() << " matches " << ent->to_string() <<  "." << endl;
+        if ((ip->getKey() == ent->from.getKey()) ||
+            (ent->from.onlyPort && ip->onlyPort) ||
+            (ent->from.onlyIP && ip->onlyIP)) {
+            //cout << "\t\tIt does!" << endl;
+            return ent;
+        } else {
+            ent = ent->getNext();
+        }
+    }
+    return NULL;
+}
+
 
 int myOpen (string name, ifstream* fileptr)
 {
@@ -182,25 +285,5 @@ int myOpen (string name, ifstream* fileptr)
         exit(1);
     }
     return 0;
-}
-
-void addToOutput(string myLine) {
-    IP_Address myIP = IP_Address(myLine);//check hashmap and generate output accordingly
-    IP_Address answer;
-    unsigned long myIP_Key = myIP.key();
-    NAT_Entry* myEntry;
-    myEntry = NAT_Database[myIP.hash()];
-    while (myEntry != NULL) {
-        if (myEntry->key() == myIP_Key) {
-            answer = myEntry->getTo();
-        }
-        myEntry = myEntry->getNext();
-    }
-    
-    if (myEntry == NULL) {
-        cout << "No nat match for " << myIP.to_string() << endl;
-    } else {
-        cout << myIP.to_string() << " -> " << answer.to_string() << endl;
-    }
 }
 /**************************/
