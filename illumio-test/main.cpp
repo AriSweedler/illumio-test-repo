@@ -97,23 +97,10 @@ unsigned long IP_Address::figureKey() {
     return answer;
 }
 
-//we could get a better hash function here
 unsigned long IP_Address::hash() {
     unsigned long answer = this->figureKey();
     return answer % NUM_BUCKETS_PURE;
 }
-
-//unsigned long IP_Address::hashPort() {
-//    unsigned long answer = this->key;
-//    answer &= 65535;
-//    return answer % NUM_BUCKETS_PORT;
-//}
-//
-//unsigned long IP_Address::hashIP() {
-//    unsigned long answer = this->key;
-//    answer &= ((4294967295)<<16);
-//    return answer % NUM_BUCKETS_IP;
-//}
 
 string IP_Address::to_string() {
     //cast the ip chars into numbers
@@ -193,23 +180,19 @@ int main () {
     //open the NAT file and read in the data
     ifstream nat_file;
     string myLine;
-    nat_file.open("/Users/ari/GitHub/illumio-test-repo/NAT", fstream::in);
+    nat_file.open("NAT", fstream::in);
     if (!nat_file) {cout << "Error opening NATfile." << endl; exit(1);}
 
     while (nat_file >> myLine) {
-        //figure out how to store these in a hashmap accurately. Add a copy into the arry. Make the array ptrs.
         NAT_Entry* myEntry = new NAT_Entry(myLine);
         NAT_Entry* other;
         if (myEntry->from.onlyIP) {
-            cout << "Saving the for the port: " << myEntry->to_string() << ". This ip hashes to " << myEntry->from.hash() << "." << endl;
             other = NAT_Database_ip[myEntry->from.hash()];
             NAT_Database_ip[myEntry->from.hash()] = myEntry;
         } else if (myEntry->from.onlyPort) {
-            cout << "Saving the for the ip: " << myEntry->to_string() << ". This port hashes to " << myEntry->from.hash() << "." << endl;
             other = NAT_Database_port[myEntry->from.hash()];
             NAT_Database_port[myEntry->from.hash()] = myEntry;
         } else {
-            cout << "Saving the for the pure: " << myEntry->to_string() << ". This pure hashes to " << myEntry->from.hash() << "." << endl;
             other = NAT_Database_pure[myEntry->from.hash()];
             NAT_Database_pure[myEntry->from.hash()] = myEntry;
         }
@@ -220,8 +203,8 @@ int main () {
     
     ifstream flow_file;
     ofstream out_file;
-    flow_file.open("/Users/ari/GitHub/illumio-test-repo/FLOW", fstream::in);
-    out_file.open("/Users/ari/GitHub/illumio-test-repo/OUTPUT", fstream::out);
+    flow_file.open("FLOW", fstream::in);
+    out_file.open("OUTPUT", fstream::out);
     if (!flow_file) {cout << "Error opening FLOWfile." << endl; exit(1);}
     if (!out_file) {cout << "Error opening OUTfile." << endl; exit(1);}
     while (getline(flow_file, myLine)) {
@@ -248,26 +231,21 @@ int main () {
         
         if (answer == NULL) {
             out_file << "No nat match for " << myIP->to_string() << endl;
-            cout << "No nat match for " << myIP->to_string() << endl;
         } else {
             out_file << myIP->to_string() << " -> " << answer->to.to_string() << endl;
-            cout << myIP->to_string() << " -> " << answer->to.to_string() << endl;
         }
     }
     flow_file.close();
     out_file.close();
 
     return 0;
-    // now we loop back and get the next line in 'str'
 }
 
 NAT_Entry* checkMatch(NAT_Entry* ent, IP_Address* ip) {
     while (ent != NULL) {
-        //cout << "\tChecking to see if " << ip->to_string() << " matches " << ent->to_string() <<  "." << endl;
         if ((ip->getKey() == ent->from.getKey()) ||
             (ent->from.onlyPort && ip->onlyPort) ||
             (ent->from.onlyIP && ip->onlyIP)) {
-            //cout << "\t\tIt does!" << endl;
             return ent;
         } else {
             ent = ent->getNext();
